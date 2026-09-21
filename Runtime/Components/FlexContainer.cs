@@ -21,6 +21,8 @@ namespace CanvasFlexbox
             public RectTransform Rect;
             public FlexItem Item;
             public ILayoutIgnorer Ignorer;
+            public float InitialWidth;
+            public float InitialHeight;
         }
 
         [Header("Flex Layout")]
@@ -192,11 +194,16 @@ namespace CanvasFlexbox
                     var child = RectTransform.GetChild(i) as RectTransform;
                     if (child == null) continue;
 
+                    float initW = child.rect.width > 0f ? child.rect.width : 100f;
+                    float initH = child.rect.height > 0f ? child.rect.height : 40f;
+
                     _childEntries.Add(new ChildEntry
                     {
                         Rect = child,
                         Item = child.GetComponent<FlexItem>(),
-                        Ignorer = child.GetComponent<ILayoutIgnorer>()
+                        Ignorer = child.GetComponent<ILayoutIgnorer>(),
+                        InitialWidth = initW,
+                        InitialHeight = initH
                     });
                 }
                 _childCacheDirty = false;
@@ -240,32 +247,58 @@ namespace CanvasFlexbox
                 var child = _activeChildren[i];
                 var flexItem = child.GetComponent<FlexItem>();
                 var node = _childNodes[i];
-
-                node.Width = child.rect.width;
-                node.Height = child.rect.height;
                 node.Tag = child;
+
+                // Query intrinsic dimensions via LayoutUtility (supports TextMeshPro, Text, Image, LayoutElement)
+                float prefW = LayoutUtility.GetPreferredWidth(child);
+                float minW = LayoutUtility.GetMinWidth(child);
+                float prefH = LayoutUtility.GetPreferredHeight(child);
+                float minH = LayoutUtility.GetMinHeight(child);
+
+                float fallbackW = 100f;
+                float fallbackH = 40f;
+                for (int c = 0; c < _childEntries.Count; c++)
+                {
+                    if (_childEntries[c].Rect == child)
+                    {
+                        fallbackW = _childEntries[c].InitialWidth;
+                        fallbackH = _childEntries[c].InitialHeight;
+                        break;
+                    }
+                }
 
                 if (flexItem != null)
                 {
+                    float baseW = flexItem.FlexBasis.IsAuto
+                        ? (prefW > 0f ? prefW : fallbackW)
+                        : flexItem.FlexBasis.Resolve(availableWidth, prefW > 0f ? prefW : fallbackW);
+
+                    float baseH = prefH > 0f ? prefH : fallbackH;
+
+                    node.Width = baseW;
+                    node.Height = baseH;
                     node.FlexGrow = flexItem.FlexGrow;
                     node.FlexShrink = flexItem.FlexShrink;
                     node.FlexBasis = flexItem.FlexBasis;
                     node.AlignSelf = flexItem.AlignSelf;
                     node.Margin = flexItem.Margin;
-                    node.MinWidth = flexItem.MinWidth;
-                    node.MinHeight = flexItem.MinHeight;
+                    node.MinWidth = flexItem.MinWidth > 0f ? flexItem.MinWidth : (minW > 0f ? minW : (prefW > 0f ? Mathf.Min(prefW, 40f) : 0f));
+                    node.MinHeight = flexItem.MinHeight > 0f ? flexItem.MinHeight : (minH > 0f ? minH : 0f);
                     node.MaxWidth = flexItem.MaxWidth;
                     node.MaxHeight = flexItem.MaxHeight;
                 }
                 else
                 {
+                    // Items without explicit FlexItem preserve their content-based size
+                    node.Width = prefW > 0f ? prefW : fallbackW;
+                    node.Height = prefH > 0f ? prefH : fallbackH;
                     node.FlexGrow = 0f;
-                    node.FlexShrink = 1f;
+                    node.FlexShrink = 0f; // Do not crush raw UI elements
                     node.FlexBasis = FlexLength.Auto;
                     node.AlignSelf = AlignSelf.Auto;
                     node.Margin = FlexOffsets.Zero;
-                    node.MinWidth = 0f;
-                    node.MinHeight = 0f;
+                    node.MinWidth = minW > 0f ? minW : node.Width;
+                    node.MinHeight = minH > 0f ? minH : node.Height;
                     node.MaxWidth = float.PositiveInfinity;
                     node.MaxHeight = float.PositiveInfinity;
                 }
