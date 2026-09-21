@@ -179,15 +179,21 @@ namespace CanvasFlexbox.Editor
             var top = offsetsProp.FindPropertyRelative("top");
             var bottom = offsetsProp.FindPropertyRelative("bottom");
 
+            float originalLabelWidth = EditorGUIUtility.labelWidth;
+
             EditorGUILayout.BeginHorizontal();
+            EditorGUIUtility.labelWidth = 46f;
             EditorGUILayout.PropertyField(left, new GUIContent("Left"));
             EditorGUILayout.PropertyField(right, new GUIContent("Right"));
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.BeginHorizontal();
+            EditorGUIUtility.labelWidth = 46f;
             EditorGUILayout.PropertyField(top, new GUIContent("Top"));
             EditorGUILayout.PropertyField(bottom, new GUIContent("Bottom"));
             EditorGUILayout.EndHorizontal();
+
+            EditorGUIUtility.labelWidth = originalLabelWidth;
         }
 
         private void OnSceneGUI()

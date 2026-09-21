@@ -113,11 +113,10 @@ namespace CanvasFlexbox.Editor
             EditorGUILayout.LabelField("Quick Presets", EditorStyles.miniBoldLabel);
             EditorGUILayout.BeginHorizontal();
 
-            if (GUILayout.Button("Row Start", EditorStyles.miniButtonLeft))
+            if (GUILayout.Button("Top-Left", EditorStyles.miniButtonLeft))
             {
-                _directionProp.enumValueIndex = (int)FlexDirection.Row;
                 _justifyContentProp.enumValueIndex = (int)JustifyContent.FlexStart;
-                _alignItemsProp.enumValueIndex = (int)AlignItems.Center;
+                _alignItemsProp.enumValueIndex = (int)AlignItems.FlexStart;
             }
 
             if (GUILayout.Button("Row Between", EditorStyles.miniButtonMid))
@@ -127,9 +126,8 @@ namespace CanvasFlexbox.Editor
                 _alignItemsProp.enumValueIndex = (int)AlignItems.Center;
             }
 
-            if (GUILayout.Button("Column Center", EditorStyles.miniButtonMid))
+            if (GUILayout.Button("Center Both", EditorStyles.miniButtonMid))
             {
-                _directionProp.enumValueIndex = (int)FlexDirection.Column;
                 _justifyContentProp.enumValueIndex = (int)JustifyContent.Center;
                 _alignItemsProp.enumValueIndex = (int)AlignItems.Center;
             }
@@ -154,15 +152,21 @@ namespace CanvasFlexbox.Editor
 
             EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
 
+            float originalLabelWidth = EditorGUIUtility.labelWidth;
+
             EditorGUILayout.BeginHorizontal();
+            EditorGUIUtility.labelWidth = 46f;
             EditorGUILayout.PropertyField(left, new GUIContent("Left"));
             EditorGUILayout.PropertyField(right, new GUIContent("Right"));
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.BeginHorizontal();
+            EditorGUIUtility.labelWidth = 46f;
             EditorGUILayout.PropertyField(top, new GUIContent("Top"));
             EditorGUILayout.PropertyField(bottom, new GUIContent("Bottom"));
             EditorGUILayout.EndHorizontal();
+
+            EditorGUIUtility.labelWidth = originalLabelWidth;
         }
 
         private void AddChildItem()
