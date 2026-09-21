@@ -12,6 +12,7 @@ namespace CanvasFlexbox
 
     /// <summary>
     /// Represents a length value that can be Auto, Pixel, or Percent.
+    /// Optimized as an immutable-friendly value type with readonly members.
     /// </summary>
     [Serializable]
     public struct FlexLength : IEquatable<FlexLength>
@@ -19,11 +20,11 @@ namespace CanvasFlexbox
         [SerializeField] private FlexUnit _unit;
         [SerializeField] private float _value;
 
-        public FlexUnit Unit => _unit;
-        public float Value => _value;
-        public bool IsAuto => _unit == FlexUnit.Auto;
-        public bool IsPixel => _unit == FlexUnit.Pixel;
-        public bool IsPercent => _unit == FlexUnit.Percent;
+        public readonly FlexUnit Unit => _unit;
+        public readonly float Value => _value;
+        public readonly bool IsAuto => _unit == FlexUnit.Auto;
+        public readonly bool IsPixel => _unit == FlexUnit.Pixel;
+        public readonly bool IsPercent => _unit == FlexUnit.Percent;
 
         public static FlexLength Auto => new FlexLength(FlexUnit.Auto, 0f);
 
@@ -37,7 +38,7 @@ namespace CanvasFlexbox
             _value = value;
         }
 
-        public float Resolve(float parentDimension, float fallbackValue = 0f)
+        public readonly float Resolve(float parentDimension, float fallbackValue = 0f)
         {
             return _unit switch
             {
@@ -48,17 +49,17 @@ namespace CanvasFlexbox
             };
         }
 
-        public bool Equals(FlexLength other)
+        public readonly bool Equals(FlexLength other)
         {
             return _unit == other._unit && Mathf.Approximately(_value, other._value);
         }
 
-        public override bool Equals(object obj)
+        public override readonly bool Equals(object obj)
         {
             return obj is FlexLength other && Equals(other);
         }
 
-        public override int GetHashCode()
+        public override readonly int GetHashCode()
         {
             unchecked
             {
@@ -71,7 +72,7 @@ namespace CanvasFlexbox
 
         public static implicit operator FlexLength(float pixels) => Pixels(pixels);
 
-        public override string ToString()
+        public override readonly string ToString()
         {
             return _unit switch
             {

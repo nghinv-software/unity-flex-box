@@ -164,12 +164,16 @@ namespace CanvasFlexbox
         protected override void OnEnable()
         {
             base.OnEnable();
-            SetDirty();
+            var parent = GetComponentInParent<FlexContainer>();
+            if (parent != null) parent.InvalidateChildCache();
+            else SetDirty();
         }
 
         protected override void OnDisable()
         {
-            SetDirty();
+            var parent = GetComponentInParent<FlexContainer>();
+            if (parent != null) parent.InvalidateChildCache();
+            else SetDirty();
             base.OnDisable();
         }
 

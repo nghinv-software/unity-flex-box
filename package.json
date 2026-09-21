@@ -1,6 +1,6 @@
 {
   "name": "com.nghinv.flexbox",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "displayName": "Canvas Flexbox Layout",
   "description": "High-performance pure C# Flexbox layout engine for Unity uGUI Canvas with Inspector live preview, Scene Gizmos, and Fluent Code API.",
   "unity": "2022.3",

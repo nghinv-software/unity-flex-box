@@ -8,7 +8,7 @@ namespace CanvasFlexbox
 {
     /// <summary>
     /// Flexbox layout container for Unity UI Canvas.
-    /// Manages child RectTransforms according to CSS Flexbox rules.
+    /// Manages child RectTransforms according to W3C CSS Flexbox rules with zero GC allocations during steady-state updates.
     /// </summary>
     [ExecuteAlways]
     [DisallowMultipleComponent]
@@ -16,6 +16,13 @@ namespace CanvasFlexbox
     [AddComponentMenu("Layout/Flex Container", 101)]
     public class FlexContainer : UIBehaviour, ILayoutGroup, ILayoutSelfController, ILayoutElement
     {
+        private struct ChildEntry
+        {
+            public RectTransform Rect;
+            public FlexItem Item;
+            public ILayoutIgnorer Ignorer;
+        }
+
         [Header("Flex Layout")]
         [SerializeField] private FlexDirection _direction = FlexDirection.Row;
         [SerializeField] private FlexWrap _wrap = FlexWrap.NoWrap;
@@ -39,9 +46,15 @@ namespace CanvasFlexbox
         public RectTransform RectTransform => _rectTransform != null ? _rectTransform : (_rectTransform = GetComponent<RectTransform>());
 
         private DrivenRectTransformTracker _tracker;
-        private readonly List<RectTransform> _activeChildren = new List<RectTransform>();
-        private readonly List<FlexNode> _childNodes = new List<FlexNode>();
-        private FlexNode _rootNode;
+
+        // Pooled cache and node structures to prevent runtime GC allocations
+        private readonly List<ChildEntry> _childEntries = new List<ChildEntry>(16);
+        private readonly List<RectTransform> _activeChildren = new List<RectTransform>(16);
+        private readonly List<FlexNode> _childNodes = new List<FlexNode>(16);
+        private readonly FlexNode _rootNode = new FlexNode();
+
+        private bool _childCacheDirty = true;
+        private bool _isCalculatingLayout = false;
 
         private float _minWidth;
         private float _preferredWidth;
@@ -117,15 +130,22 @@ namespace CanvasFlexbox
         public float flexibleHeight => -1f;
         public int layoutPriority => 0;
 
+        public void InvalidateChildCache()
+        {
+            _childCacheDirty = true;
+            SetDirty();
+        }
+
         public void SetDirty()
         {
-            if (!IsActive()) return;
+            if (!IsActive() || _isCalculatingLayout) return;
             LayoutRebuilder.MarkLayoutForRebuild(RectTransform);
         }
 
         protected override void OnEnable()
         {
             base.OnEnable();
+            _childCacheDirty = true;
             SetDirty();
         }
 
@@ -139,11 +159,13 @@ namespace CanvasFlexbox
         protected override void OnRectTransformDimensionsChange()
         {
             base.OnRectTransformDimensionsChange();
+            if (_isCalculatingLayout) return;
             SetDirty();
         }
 
         protected void OnTransformChildrenChanged()
         {
+            _childCacheDirty = true;
             SetDirty();
         }
 
@@ -153,22 +175,41 @@ namespace CanvasFlexbox
             base.OnValidate();
             _rowGap = Mathf.Max(0f, _rowGap);
             _columnGap = Mathf.Max(0f, _columnGap);
+            _childCacheDirty = true;
             SetDirty();
         }
 #endif
 
         private void CollectActiveChildren()
         {
-            _activeChildren.Clear();
-            for (int i = 0; i < RectTransform.childCount; i++)
+            int childCount = RectTransform.childCount;
+
+            if (_childCacheDirty || _childEntries.Count != childCount)
             {
-                var child = RectTransform.GetChild(i) as RectTransform;
-                if (child == null || !child.gameObject.activeInHierarchy) continue;
+                _childEntries.Clear();
+                for (int i = 0; i < childCount; i++)
+                {
+                    var child = RectTransform.GetChild(i) as RectTransform;
+                    if (child == null) continue;
 
-                var ignorer = child.GetComponent<ILayoutIgnorer>();
-                if (ignorer != null && ignorer.ignoreLayout) continue;
+                    _childEntries.Add(new ChildEntry
+                    {
+                        Rect = child,
+                        Item = child.GetComponent<FlexItem>(),
+                        Ignorer = child.GetComponent<ILayoutIgnorer>()
+                    });
+                }
+                _childCacheDirty = false;
+            }
 
-                _activeChildren.Add(child);
+            _activeChildren.Clear();
+            for (int i = 0; i < _childEntries.Count; i++)
+            {
+                var entry = _childEntries[i];
+                if (entry.Rect == null || !entry.Rect.gameObject.activeInHierarchy) continue;
+                if (entry.Ignorer != null && entry.Ignorer.ignoreLayout) continue;
+
+                _activeChildren.Add(entry.Rect);
             }
         }
 
@@ -176,33 +217,33 @@ namespace CanvasFlexbox
         {
             CollectActiveChildren();
 
-            _rootNode = new FlexNode
+            _rootNode.Width = availableWidth;
+            _rootNode.Height = availableHeight;
+            _rootNode.Direction = _direction;
+            _rootNode.Wrap = _wrap;
+            _rootNode.JustifyContent = _justifyContent;
+            _rootNode.AlignItems = _alignItems;
+            _rootNode.AlignContent = _alignContent;
+            _rootNode.Padding = _padding;
+            _rootNode.RowGap = _rowGap;
+            _rootNode.ColumnGap = _columnGap;
+            _rootNode.ClearChildren();
+
+            int activeCount = _activeChildren.Count;
+            while (_childNodes.Count < activeCount)
             {
-                Width = availableWidth,
-                Height = availableHeight,
-                Direction = _direction,
-                Wrap = _wrap,
-                JustifyContent = _justifyContent,
-                AlignItems = _alignItems,
-                AlignContent = _alignContent,
-                Padding = _padding,
-                RowGap = _rowGap,
-                ColumnGap = _columnGap
-            };
+                _childNodes.Add(new FlexNode());
+            }
 
-            _childNodes.Clear();
-
-            for (int i = 0; i < _activeChildren.Count; i++)
+            for (int i = 0; i < activeCount; i++)
             {
                 var child = _activeChildren[i];
                 var flexItem = child.GetComponent<FlexItem>();
+                var node = _childNodes[i];
 
-                var node = new FlexNode
-                {
-                    Width = child.rect.width,
-                    Height = child.rect.height,
-                    Tag = child
-                };
+                node.Width = child.rect.width;
+                node.Height = child.rect.height;
+                node.Tag = child;
 
                 if (flexItem != null)
                 {
@@ -216,8 +257,19 @@ namespace CanvasFlexbox
                     node.MaxWidth = flexItem.MaxWidth;
                     node.MaxHeight = flexItem.MaxHeight;
                 }
+                else
+                {
+                    node.FlexGrow = 0f;
+                    node.FlexShrink = 1f;
+                    node.FlexBasis = FlexLength.Auto;
+                    node.AlignSelf = AlignSelf.Auto;
+                    node.Margin = FlexOffsets.Zero;
+                    node.MinWidth = 0f;
+                    node.MinHeight = 0f;
+                    node.MaxWidth = float.PositiveInfinity;
+                    node.MaxHeight = float.PositiveInfinity;
+                }
 
-                _childNodes.Add(node);
                 _rootNode.AddChild(node);
             }
         }
@@ -251,22 +303,15 @@ namespace CanvasFlexbox
             if (_fitToContentWidth)
             {
                 currentWidth = _preferredWidth;
+                _isCalculatingLayout = true;
                 RectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, currentWidth);
+                _isCalculatingLayout = false;
             }
 
-            if (_rootNode == null || _rootNode.Children.Count != _activeChildren.Count)
-            {
-                BuildNodeTree(currentWidth, currentHeight);
-            }
-            else
-            {
-                _rootNode.Width = currentWidth;
-                _rootNode.Height = currentHeight;
-            }
-
+            BuildNodeTree(currentWidth, currentHeight);
             FlexLayoutSolver.CalculateLayout(_rootNode, currentWidth, currentHeight);
 
-            for (int i = 0; i < _childNodes.Count; i++)
+            for (int i = 0; i < _activeChildren.Count; i++)
             {
                 var node = _childNodes[i];
                 var child = _activeChildren[i];
@@ -293,10 +338,12 @@ namespace CanvasFlexbox
             if (_fitToContentHeight)
             {
                 currentHeight = _preferredHeight;
+                _isCalculatingLayout = true;
                 RectTransform.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, currentHeight);
+                _isCalculatingLayout = false;
             }
 
-            for (int i = 0; i < _childNodes.Count; i++)
+            for (int i = 0; i < _activeChildren.Count; i++)
             {
                 var node = _childNodes[i];
                 var child = _activeChildren[i];

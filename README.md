@@ -1,172 +1,182 @@
 # Canvas Flexbox Layout for Unity (uGUI)
 
-[![Unity 2022.3+](https://img.shields.io/badge/unity-2022.3%2B-blue.svg)](https://unity.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE.md)
-[![Pure C#](https://img.shields.io/badge/Pure%20C%23-Zero%20Native%20DLL-success.svg)](#)
-
-A high-performance, **Pure C# Flexbox layout engine** specifically crafted for Unity **uGUI (Canvas / RectTransform)**. It brings the power and elegance of modern CSS Flexbox to Unity UI without requiring native DLLs or UI Toolkit.
+Canvas Flexbox Layout is a high-performance, pure C# Flexbox layout engine designed specifically for Unity uGUI (Canvas / RectTransform). It brings standard W3C CSS Flexbox layout semantics to Unity UI while eliminating runtime garbage collection allocations.
 
 ---
 
-## 🌟 Tại sao cần Canvas Flexbox? (Key Benefits)
+## Technical Overview
 
-Mặc định, Unity uGUI (`HorizontalLayoutGroup`, `VerticalLayoutGroup`, `GridLayoutGroup`) rất hạn chế:
-- ❌ Không hỗ trợ **Wrap đa dòng** theo kích thước động của item.
-- ❌ Thiếu các chế độ căn chỉnh chuẩn hiện đại: `space-between`, `space-around`, `space-evenly`.
-- ❌ Không có cơ chế **Flex-Grow** và **Flex-Shrink** phân phối khoảng trống dư / bù trừ co giãn theo tỷ lệ mượt mà.
-- ❌ Căn chỉnh trục phụ (`align-items`, `align-self`) rất khó khăn.
+Unity's built-in uGUI layout system (`HorizontalLayoutGroup`, `VerticalLayoutGroup`, `GridLayoutGroup`) has fundamental architectural constraints:
+- No native multi-line wrapping based on dynamic child dimensions.
+- Missing standard alignment modes (`space-between`, `space-around`, `space-evenly`).
+- Lack of proportional space distribution (`flex-grow`, `flex-shrink`).
+- Inflexible cross-axis alignment per item (`align-self`).
 
-**Canvas Flexbox** giải quyết triệt để toàn bộ vấn đề trên:
-- ✅ **Pure C# Layout Solver**: Không phụ thuộc file native C++ (`.dll`, `.so`, `.dylib`), chạy mượt mà trên 100% nền tảng: **WebGL, iOS, Android, PC, macOS, Consoles**.
-- ✅ **Tương thích hoàn toàn Canvas & RectTransform**: Giữ nguyên pivot con, hỗ trợ animation (DOTween, Animator), Particle System (`UIParticle`), Spine Canvas, Canvas Scaler.
-- ✅ **Hai phong cách làm việc linh hoạt**:
-  1. **Inspector-First**: Kéo thả component `FlexContainer` và `FlexItem` trên Prefab với 1-Click Presets.
-  2. **Fluent Code API (`FlexBuilder`)**: Dựng UI hoàn toàn bằng code C# mạch lạc, nhanh chóng.
-- ✅ **Scene View Gizmos Trực Quan**: Vẽ đường viền padding (cyan chấm gạch), margin của item (cam), hướng trục chính (mũi tên vàng) ngay trên Scene View.
-- ✅ **Tự động co giãn theo nội dung (`FitToContent`)**: Hoạt động mượt mà như ContentSizeFitter.
+Canvas Flexbox provides a complete W3C-compliant Flexbox implementation directly on `RectTransform` without external native binaries (such as Facebook Yoga C++ DLLs), ensuring seamless execution across all Unity target platforms including WebGL, iOS, Android, macOS, Windows, Linux, and Consoles.
 
 ---
 
-## 📦 Cài đặt (Installation)
+## Performance and Architecture
 
-### Cách 1: Embedded Package (Khuyên dùng trong project nội bộ)
-Thư mục package đã nằm sẵn tại:
-```
-Packages/com.nghinv.flexbox
-```
-Package Manager của Unity sẽ tự động nạp package và compile các assembly definitions:
-- `CanvasFlexbox.Runtime`
-- `CanvasFlexbox.Editor`
-- `CanvasFlexbox.Editor.Tests`
+### 1. Zero Garbage Collection Allocation (0 B GC)
+Standard layout recalculations in games can happen frequently (e.g. during animations, screen resizes, or content changes). To prevent GC-induced frame drops, Canvas Flexbox utilizes:
+- **Struct-based calculations**: Item contexts and line descriptors are implemented as value types (`FlexItemContext`, `FlexLine`).
+- **Internal static memory pooling**: Reusable scratch buffers handle item collections, line slicing, and BFS traversal without heap allocations.
+- **Node reuse**: `FlexContainer` pools and reuses `FlexNode` instances across layout passes rather than instantiating new objects.
 
-### Cách 2: Qua Git URL (UPM)
-Trong Unity Editor: `Window` > `Package Manager` > `+` > `Add package from git URL...`:
+### 2. Component Cache Optimization
+In typical uGUI layouts, querying `GetComponent<T>()` across child transforms during rebuild passes causes significant CPU overhead. `FlexContainer` employs an internal child entry cache that updates only upon hierarchy changes (`OnTransformChildrenChanged`) or explicit invalidations, minimizing component query frequency.
+
+### 3. Iterative Non-Recursive Resolution
+Nested flex containers are solved iteratively using a breadth-first traversal queue (`s_NodeQueue`). This eliminates call stack overhead, avoids recursion depth limits, and maintains thread-safe buffer lifecycle boundaries.
+
+### 4. Re-entrancy Protection
+Self-sizing features (`FitToContentWidth`, `FitToContentHeight`) modify the container's own `RectTransform` dimensions during layout passes. `FlexContainer` includes layout recursion guards to prevent recursive rebuild triggers.
+
+### 5. Pivot Preservation
+Child transforms are positioned by calculating the exact offset according to each child's current `pivot`. UI elements can use custom pivots (e.g., center `(0.5, 0.5)` for scale animations) without visual offset artifacts.
+
+---
+
+## Installation
+
+### Method 1: Git URL (Unity Package Manager)
+1. Open the Unity Editor and navigate to `Window` > `Package Manager`.
+2. Click the `+` button in the top-left corner and select `Add package from git URL...`.
+3. Enter the repository URL:
 ```
 https://github.com/nghinv-software/unity-flex-box.git
 ```
-Hoặc chỉ định release tag:
+To lock to a specific release version:
 ```
 https://github.com/nghinv-software/unity-flex-box.git#1.0.0
 ```
 
----
-
-## 🚀 Hướng Dẫn Sử Dụng (Quick Start)
-
-### 1. Sử dụng qua Inspector (Prefab / Visual Workflow)
-
-1. Chọn bất kỳ UI GameObject nào trong Canvas (hoặc tạo Panel mới).
-2. Nhấn **Add Component** $\rightarrow$ chọn **`Flex Container`**.
-3. Sử dụng thanh công cụ **Quick Presets**:
-   - `Row Start`: Xếp ngang từ trái sang phải.
-   - `Row Between`: Căn 2 đầu đều nhau (`space-between`).
-   - `Column Center`: Xếp dọc căn giữa (`center`).
-   - `Grid Wrap`: Tự động xuống dòng khi đầy chiều rộng (`wrap`).
-4. Thiết lập khoảng cách:
-   - **Row Gap / Column Gap**: Khoảng cách giữa các hàng và cột (pixel).
-   - **Padding**: Đệm lề trong (Left, Right, Top, Bottom).
-5. (Tuỳ chọn) Gắn **`Flex Item`** lên GameObject con để tuỳ chỉnh:
-   - **Flex Grow**: Cho phép co giãn phình to chiếm khoảng trống dư (ví dụ: Search bar grow = 1, nút bấm bên cạnh grow = 0).
-   - **Flex Shrink**: Tỷ lệ co lại khi thiếu diện tích.
-   - **Flex Basis**: Chiều dài cơ sở ban đầu (`Auto`, Pixel `px`, hoặc Phần trăm `%`).
-   - **Align Self**: Ghi đè căn chỉnh riêng cho item này (`Stretch`, `Center`, `FlexStart`, `FlexEnd`).
-   - **Margin**: Khoảng cách riêng quanh item.
+### Method 2: manifest.json
+Add the package declaration directly to `Packages/manifest.json`:
+```json
+{
+  "dependencies": {
+    "com.nghinv.flexbox": "https://github.com/nghinv-software/unity-flex-box.git#1.0.0"
+  }
+}
+```
 
 ---
 
-### 2. Sử dụng qua Fluent Code API (`FlexBuilder`)
+## Usage Guide
 
-Bạn có thể tạo giao diện hoàn toàn bằng C# code trong vài dòng:
+### 1. Editor / Inspector Workflow (No Code)
+
+#### Creating Containers
+In the Hierarchy window, right-click any UI Canvas or select from the top menu `GameObject` > `UI` > `Flexbox`:
+- **Flex Container (Row)**: Horizontal layout (Headers, toolbars, icon rows).
+- **Flex Container (Column)**: Vertical layout (Menus, settings dialogs, modal cards).
+- **Flex Container (Wrap Grid)**: Multi-line grid with automatic line breaking.
+
+#### Configuring Container Properties
+Select the container GameObject to configure layout parameters in the Inspector:
+- **Quick Presets**: One-click configuration buttons (`Row Start`, `Row Between`, `Column Center`, `Grid Wrap`).
+- **Flex Axis & Direction**:
+  - `Direction`: `Row`, `RowReverse`, `Column`, `ColumnReverse`.
+  - `Wrap`: `NoWrap`, `Wrap`, `WrapReverse`.
+  - `Justify Content`: `FlexStart`, `FlexEnd`, `Center`, `SpaceBetween`, `SpaceAround`, `SpaceEvenly`.
+- **Cross Axis Alignment**:
+  - `Align Items`: `FlexStart`, `FlexEnd`, `Center`, `Stretch`.
+  - `Align Content`: Distribution of wrapped lines along the cross axis.
+- **Spacing & Padding**:
+  - `Row Gap` / `Column Gap`: Explicit pixel spacing between rows and columns.
+  - `Padding`: Inset offsets (`Left`, `Right`, `Top`, `Bottom`).
+- **Container Sizing**:
+  - `Fit To Content Width` / `Fit To Content Height`: Resizes container automatically to enclose child items.
+
+#### Configuring Child Elements
+Add a `FlexItem` component to any child GameObject:
+- **Flex Grow**: Ratio for absorbing available free space along the main axis.
+- **Flex Shrink**: Ratio for contracting when total item size exceeds available space.
+- **Flex Basis**: Initial size before remaining space is distributed (`Auto`, Pixels, or Percentage).
+- **Align Self**: Individual cross-axis alignment override (`FlexStart`, `FlexEnd`, `Center`, `Stretch`).
+- **Margins**: Per-item outer spacing offsets.
+- **Constraints**: Minimum and maximum dimensions (`Min W`, `Max W`, `Min H`, `Max H`).
+
+#### Scene View Gizmos
+When a `FlexContainer` is selected in Edit mode:
+- Solid cyan frame indicates the container's outer bounds.
+- Dotted cyan inner frame indicates active padding areas.
+- Yellow directional arrow indicates the main axis layout flow.
+- Orange dotted frames indicate margin boundaries of child items.
+
+---
+
+### 2. Fluent Code API (C#)
+
+Procedural UI can be composed using `FlexBuilder`:
 
 ```csharp
 using UnityEngine;
 using CanvasFlexbox;
 
-public class UIShowcase : MonoBehaviour
+public class UIController : MonoBehaviour
 {
-    [SerializeField] private RectTransform _canvasTransform;
+    [SerializeField] private RectTransform containerParent;
 
     private void Start()
     {
-        // 1. Tạo Header Bar nằm ngang, căn 2 đầu (Space-Between), căn giữa theo chiều dọc
-        var header = FlexBuilder.Create("HeaderBar")
+        // Construct a responsive top navigation bar
+        var navBar = FlexBuilder.Create("NavigationBar")
             .AsRow()
             .WithJustifyContent(JustifyContent.SpaceBetween)
             .WithAlignItems(AlignItems.Center)
-            .WithPadding(horizontal: 20f, vertical: 10f)
-            .WithSize(800f, 60f)
-            .AttachTo(_canvasTransform);
+            .WithPadding(horizontal: 24f, vertical: 12f)
+            .WithSize(800f, 64f)
+            .AttachTo(containerParent);
 
-        // Nút Back (kích thước cố định, không co giãn)
-        header.AddChild("BtnBack")
-            .WithSize(80f, 40f)
+        // Fixed-size left item
+        navBar.AddChild("BackButton")
+            .WithSize(48f, 48f)
             .WithFlex(grow: 0f, shrink: 0f);
 
-        // Tiêu đề ở giữa (chiếm phần trống còn lại)
-        header.AddChild("TitleText")
-            .WithSize(200f, 40f)
+        // Flexible center title
+        navBar.AddChild("Title")
+            .WithSize(200f, 48f)
             .WithFlex(grow: 1f);
 
-        // Nút Cài đặt
-        header.AddChild("BtnSettings")
-            .WithSize(40f, 40f)
+        // Fixed-size right action
+        navBar.AddChild("SettingsButton")
+            .WithSize(48f, 48f)
             .WithFlex(grow: 0f, shrink: 0f);
-
-        // 2. Tạo Grid tự động Wrap nhiều hàng với Gap 12px
-        var cardGrid = FlexBuilder.Create("CardGrid")
-            .AsRow()
-            .WithWrap(FlexWrap.Wrap)
-            .WithGap(columnGap: 16f, rowGap: 16f)
-            .WithPadding(16f)
-            .WithSize(600f, 400f)
-            .AttachTo(_canvasTransform);
-
-        for (int i = 0; i < 6; i++)
-        {
-            cardGrid.AddChild($"Card_{i}")
-                .WithSize(180f, 100f)
-                .WithMargin(4f);
-        }
     }
 }
 ```
 
 ---
 
-## 🎨 Cấu Trúc Thông Số Flexbox (Cheat Sheet)
+## Property Reference
 
-| Thuộc tính | Các giá trị hỗ trợ | Mô tả |
+| Property | Values | Description |
 | :--- | :--- | :--- |
-| **Direction** | `Row`, `RowReverse`, `Column`, `ColumnReverse` | Hướng của trục chính (Main Axis) |
-| **Wrap** | `NoWrap`, `Wrap`, `WrapReverse` | Có cho phép rớt xuống dòng tiếp theo hay ép trên 1 hàng |
-| **JustifyContent** | `FlexStart`, `FlexEnd`, `Center`, `SpaceBetween`, `SpaceAround`, `SpaceEvenly` | Phân phối khoảng cách trên trục chính |
-| **AlignItems** | `FlexStart`, `FlexEnd`, `Center`, `Stretch` | Căn chỉnh các item trên trục phụ (Cross Axis) của dòng |
-| **AlignContent** | `FlexStart`, `FlexEnd`, `Center`, `SpaceBetween`, `SpaceAround`, `Stretch` | Phân phối các dòng trên trục phụ khi có nhiều dòng (Wrap) |
-| **AlignSelf** | `Auto`, `FlexStart`, `FlexEnd`, `Center`, `Stretch` | Item con tự ghi đè cách căn chỉnh của container |
-| **FlexGrow** | Số thực $\ge 0$ | Trọng số hấp thụ khoảng trống dư |
-| **FlexShrink** | Số thực $\ge 0$ | Trọng số bị co lại khi thiếu diện tích |
-| **FlexBasis** | `Auto`, Pixels (`px`), Percent (`%`) | Kích thước ban đầu trước khi tính toán |
-| **FitToContent** | `Width`, `Height` (Boolean) | Tự động resize RectTransform container bọc vừa khít con |
+| `Direction` | `Row`, `RowReverse`, `Column`, `ColumnReverse` | Orientation of the main axis |
+| `Wrap` | `NoWrap`, `Wrap`, `WrapReverse` | Controls whether items wrap onto multiple lines |
+| `JustifyContent` | `FlexStart`, `FlexEnd`, `Center`, `SpaceBetween`, `SpaceAround`, `SpaceEvenly` | Main-axis item distribution |
+| `AlignItems` | `FlexStart`, `FlexEnd`, `Center`, `Stretch` | Cross-axis item alignment within each line |
+| `AlignContent` | `FlexStart`, `FlexEnd`, `Center`, `SpaceBetween`, `SpaceAround`, `Stretch` | Cross-axis line distribution for multi-line wrap |
+| `AlignSelf` | `Auto`, `FlexStart`, `FlexEnd`, `Center`, `Stretch` | Per-item override of container `AlignItems` |
+| `FlexGrow` | Float (>= 0) | Factor for growing into positive free space |
+| `FlexShrink` | Float (>= 0) | Factor for shrinking under negative free space |
+| `FlexBasis` | `Auto`, Pixel value, Percentage | Initial base size along the main axis |
+| `RowGap` / `ColumnGap` | Float (pixels) | Spacing between lines and items |
+| `FitToContent` | Boolean | Automatically sizes RectTransform to fit child contents |
 
 ---
 
-## 🧪 Kiểm Thử Tự Động (Unit Tests)
+## Verification and Testing
 
-Package đi kèm bộ Unit Test đầy đủ trong `Tests/Editor`:
-- `RowLayout_JustifyContent_SpaceBetween_PositionsCorrectly`
-- `RowLayout_JustifyContent_Center_PositionsCorrectly`
-- `RowLayout_FlexGrow_DistributesRemainingSpace`
-- `RowLayout_FlexShrink_ReducesOverflowingItems`
-- `ColumnLayout_WithPaddingAndGap_CalculatesYOffsets`
-- `MultiLine_Wrap_BreaksLineWhenExceedingWidth`
-- `AlignItems_Stretch_StretchesCrossDimension`
-- `ReverseDirection_RowReverse_InvertsMainOrder`
-- `FlexContainer_PositionsChildren_WithSpaceBetween`
-- `FlexBuilder_FluentAPI_ConstructsValidHierarchy`
-- `FlexContainer_FitToContent_ResizesRectTransform`
+Automated NUnit tests are located in `Tests/Editor`:
+- `FlexLayoutSolverTests`: Pure algorithm tests verifying space distribution, grow/shrink weighting, multi-line wrapping, and reverse layout calculations.
+- `FlexContainerTests`: Integration tests verifying Canvas rebuild cycles, driven transform trackers, self-sizing, and child positioning accuracy.
 
 ---
 
-## 📄 License
+## License
 
-Phát hành dưới giấy phép [MIT License](LICENSE.md). Bạn có thể tự do tích hợp vào mọi dự án game thương mại hoặc mã nguồn mở.
+This project is licensed under the MIT License. See [LICENSE.md](LICENSE.md) for details.

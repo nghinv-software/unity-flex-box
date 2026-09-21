@@ -5,6 +5,7 @@ namespace CanvasFlexbox
 {
     /// <summary>
     /// Represents 4-directional offsets used for Margins and Paddings.
+    /// Optimized as an immutable-friendly value type with readonly members.
     /// </summary>
     [Serializable]
     public struct FlexOffsets : IEquatable<FlexOffsets>
@@ -14,15 +15,15 @@ namespace CanvasFlexbox
         [SerializeField] public float top;
         [SerializeField] public float bottom;
 
-        public float Left => left;
-        public float Right => right;
-        public float Top => top;
-        public float Bottom => bottom;
+        public readonly float Left => left;
+        public readonly float Right => right;
+        public readonly float Top => top;
+        public readonly float Bottom => bottom;
 
-        public float Horizontal => left + right;
-        public float Vertical => top + bottom;
+        public readonly float Horizontal => left + right;
+        public readonly float Vertical => top + bottom;
 
-        public static readonly FlexOffsets Zero = new FlexOffsets(0, 0, 0, 0);
+        public static readonly FlexOffsets Zero = new FlexOffsets(0f, 0f, 0f, 0f);
 
         public FlexOffsets(float all)
         {
@@ -43,7 +44,7 @@ namespace CanvasFlexbox
             this.bottom = bottom;
         }
 
-        public bool Equals(FlexOffsets other)
+        public readonly bool Equals(FlexOffsets other)
         {
             return Mathf.Approximately(left, other.left) &&
                    Mathf.Approximately(right, other.right) &&
@@ -51,12 +52,12 @@ namespace CanvasFlexbox
                    Mathf.Approximately(bottom, other.bottom);
         }
 
-        public override bool Equals(object obj)
+        public override readonly bool Equals(object obj)
         {
             return obj is FlexOffsets other && Equals(other);
         }
 
-        public override int GetHashCode()
+        public override readonly int GetHashCode()
         {
             unchecked
             {
@@ -71,7 +72,7 @@ namespace CanvasFlexbox
         public static bool operator ==(FlexOffsets left, FlexOffsets right) => left.Equals(right);
         public static bool operator !=(FlexOffsets left, FlexOffsets right) => !left.Equals(right);
 
-        public override string ToString()
+        public override readonly string ToString()
         {
             return $"FlexOffsets(L:{left}, R:{right}, T:{top}, B:{bottom})";
         }

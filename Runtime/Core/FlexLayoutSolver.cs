@@ -6,11 +6,11 @@ namespace CanvasFlexbox
 {
     /// <summary>
     /// Pure C# high-performance W3C-compliant Flexbox layout solver.
-    /// Operates on FlexNode trees with zero native DLL dependencies.
+    /// Operates on FlexNode trees with zero native DLL dependencies and 0 B GC allocation per layout solve.
     /// </summary>
     public static class FlexLayoutSolver
     {
-        private class FlexItemContext
+        private struct FlexItemContext
         {
             public FlexNode Node;
             public float HypoMainSize;
@@ -28,19 +28,26 @@ namespace CanvasFlexbox
             public float MainPos;
             public float CrossPos;
 
-            public float TotalMarginMain => MarginMainStart + MarginMainEnd;
-            public float TotalMarginCross => MarginCrossStart + MarginCrossEnd;
-            public float OuterMainSize => TargetMainSize + TotalMarginMain;
+            public readonly float TotalMarginMain => MarginMainStart + MarginMainEnd;
+            public readonly float TotalMarginCross => MarginCrossStart + MarginCrossEnd;
+            public readonly float OuterMainSize => TargetMainSize + TotalMarginMain;
         }
 
-        private class FlexLine
+        private struct FlexLine
         {
-            public readonly List<FlexItemContext> Items = new List<FlexItemContext>();
+            public int StartIndex;
+            public int Count;
             public float CrossSize;
         }
 
+        // Static scratch buffers to guarantee 0 B GC allocation during layout updates
+        private static readonly List<FlexItemContext> s_Items = new List<FlexItemContext>(64);
+        private static readonly List<FlexLine> s_Lines = new List<FlexLine>(16);
+        private static readonly Queue<FlexNode> s_NodeQueue = new Queue<FlexNode>(16);
+
         /// <summary>
-        /// Solves the layout for the specified root node and its children recursively.
+        /// Solves the layout for the specified root node and its descendants iteratively.
+        /// Fully zero-allocation after initial static buffer capacity is warmed up.
         /// </summary>
         /// <param name="root">The root flex node.</param>
         /// <param name="availableWidth">Available container width (e.g. from RectTransform).</param>
@@ -57,25 +64,56 @@ namespace CanvasFlexbox
 
             if (root.Children.Count == 0) return;
 
-            bool isRow = root.IsRow;
-            float containerMain = isRow ? root.LayoutWidth : root.LayoutHeight;
-            float containerCross = isRow ? root.LayoutHeight : root.LayoutWidth;
+            s_NodeQueue.Clear();
+            s_NodeQueue.Enqueue(root);
 
-            float mainPadStart = isRow ? root.Padding.Left : root.Padding.Top;
-            float mainPadEnd = isRow ? root.Padding.Right : root.Padding.Bottom;
-            float crossPadStart = isRow ? root.Padding.Top : root.Padding.Left;
-            float crossPadEnd = isRow ? root.Padding.Bottom : root.Padding.Right;
+            while (s_NodeQueue.Count > 0)
+            {
+                var current = s_NodeQueue.Dequeue();
+                if (current.Children.Count == 0) continue;
 
-            float mainGap = isRow ? root.ColumnGap : root.RowGap;
-            float crossGap = isRow ? root.RowGap : root.ColumnGap;
+                SolveSingleNode(current);
+
+                for (int i = 0; i < current.Children.Count; i++)
+                {
+                    var child = current.Children[i];
+                    if (child.Children.Count > 0)
+                    {
+                        s_NodeQueue.Enqueue(child);
+                    }
+                }
+            }
+
+            // Clear static references to avoid memory retention
+            s_Items.Clear();
+            s_Lines.Clear();
+            s_NodeQueue.Clear();
+        }
+
+        private static void SolveSingleNode(FlexNode container)
+        {
+            s_Items.Clear();
+            s_Lines.Clear();
+
+            bool isRow = container.IsRow;
+            float containerMain = isRow ? container.LayoutWidth : container.LayoutHeight;
+            float containerCross = isRow ? container.LayoutHeight : container.LayoutWidth;
+
+            float mainPadStart = isRow ? container.Padding.Left : container.Padding.Top;
+            float mainPadEnd = isRow ? container.Padding.Right : container.Padding.Bottom;
+            float crossPadStart = isRow ? container.Padding.Top : container.Padding.Left;
+            float crossPadEnd = isRow ? container.Padding.Bottom : container.Padding.Right;
+
+            float mainGap = isRow ? container.ColumnGap : container.RowGap;
+            float crossGap = isRow ? container.RowGap : container.ColumnGap;
 
             float innerMain = Mathf.Max(0f, containerMain - (mainPadStart + mainPadEnd));
             float innerCross = Mathf.Max(0f, containerCross - (crossPadStart + crossPadEnd));
 
-            // Step 1: Collect Item Contexts
-            var items = new List<FlexItemContext>(root.Children.Count);
-            foreach (var child in root.Children)
+            // Step 1: Collect Item Contexts into flat buffer
+            for (int i = 0; i < container.Children.Count; i++)
             {
+                var child = container.Children[i];
                 var ctx = new FlexItemContext { Node = child };
 
                 if (isRow)
@@ -119,94 +157,99 @@ namespace CanvasFlexbox
 
                 ctx.TargetMainSize = ctx.HypoMainSize;
                 ctx.TargetCrossSize = ctx.HypoCrossSize;
-                items.Add(ctx);
+                s_Items.Add(ctx);
             }
 
-            // Step 2: Line Breaking (Wrap)
-            var lines = new List<FlexLine>();
-            if (root.Wrap == FlexWrap.NoWrap || items.Count == 0)
+            // Step 2: Line Breaking (Wrap) using zero-allocation slice structs
+            if (container.Wrap == FlexWrap.NoWrap || s_Items.Count == 0)
             {
-                var singleLine = new FlexLine();
-                singleLine.Items.AddRange(items);
-                lines.Add(singleLine);
+                s_Lines.Add(new FlexLine { StartIndex = 0, Count = s_Items.Count, CrossSize = 0f });
             }
             else
             {
-                var currentLine = new FlexLine();
+                int lineStart = 0;
+                int lineCount = 0;
                 float currentLineMain = 0f;
 
-                for (int i = 0; i < items.Count; i++)
+                for (int i = 0; i < s_Items.Count; i++)
                 {
-                    var item = items[i];
+                    var item = s_Items[i];
                     float itemOuter = item.HypoMainSize + item.TotalMarginMain;
-                    float neededSpace = (currentLine.Items.Count > 0 ? mainGap : 0f) + itemOuter;
+                    float neededSpace = (lineCount > 0 ? mainGap : 0f) + itemOuter;
 
-                    if (currentLine.Items.Count > 0 && currentLineMain + neededSpace > innerMain)
+                    if (lineCount > 0 && currentLineMain + neededSpace > innerMain)
                     {
-                        lines.Add(currentLine);
-                        currentLine = new FlexLine();
+                        s_Lines.Add(new FlexLine { StartIndex = lineStart, Count = lineCount, CrossSize = 0f });
+                        lineStart = i;
+                        lineCount = 0;
                         currentLineMain = 0f;
                         neededSpace = itemOuter;
                     }
 
-                    currentLine.Items.Add(item);
+                    lineCount++;
                     currentLineMain += neededSpace;
                 }
 
-                if (currentLine.Items.Count > 0)
+                if (lineCount > 0)
                 {
-                    lines.Add(currentLine);
+                    s_Lines.Add(new FlexLine { StartIndex = lineStart, Count = lineCount, CrossSize = 0f });
                 }
             }
 
-            // Step 3: Resolve Main Sizes (Grow & Shrink)
-            foreach (var line in lines)
+            // Step 3: Resolve Main Sizes (Grow & Shrink) and Line Cross Sizes
+            for (int l = 0; l < s_Lines.Count; l++)
             {
+                var line = s_Lines[l];
                 float totalHypoMain = 0f;
                 float totalGrow = 0f;
                 float totalWeightedShrink = 0f;
 
-                for (int i = 0; i < line.Items.Count; i++)
+                for (int i = line.StartIndex; i < line.StartIndex + line.Count; i++)
                 {
-                    var item = line.Items[i];
+                    var item = s_Items[i];
                     totalHypoMain += item.HypoMainSize + item.TotalMarginMain;
                     totalGrow += item.Node.FlexGrow;
                     totalWeightedShrink += item.Node.FlexShrink * item.HypoMainSize;
                 }
 
-                float totalGaps = Mathf.Max(0, line.Items.Count - 1) * mainGap;
+                float totalGaps = Mathf.Max(0, line.Count - 1) * mainGap;
                 float freeSpace = innerMain - (totalHypoMain + totalGaps);
 
                 if (freeSpace > 0f && totalGrow > 0f)
                 {
                     float distributable = totalGrow < 1f ? freeSpace * totalGrow : freeSpace;
-                    foreach (var item in line.Items)
+                    for (int i = line.StartIndex; i < line.StartIndex + line.Count; i++)
                     {
+                        var item = s_Items[i];
                         if (item.Node.FlexGrow > 0f)
                         {
                             float share = distributable * (item.Node.FlexGrow / totalGrow);
                             item.TargetMainSize = Mathf.Clamp(item.HypoMainSize + share, item.MinMain, item.MaxMain);
+                            s_Items[i] = item;
                         }
                     }
                 }
                 else if (freeSpace < 0f && totalWeightedShrink > 0f)
                 {
                     float deficit = -freeSpace;
-                    foreach (var item in line.Items)
+                    for (int i = line.StartIndex; i < line.StartIndex + line.Count; i++)
                     {
+                        var item = s_Items[i];
                         if (item.Node.FlexShrink > 0f)
                         {
                             float weight = item.Node.FlexShrink * item.HypoMainSize;
                             float reduction = deficit * (weight / totalWeightedShrink);
                             item.TargetMainSize = Mathf.Clamp(item.HypoMainSize - reduction, item.MinMain, item.MaxMain);
+                            s_Items[i] = item;
                         }
                     }
                 }
 
                 // Calculate Cross Size of the line
                 float lineMaxCross = 0f;
-                foreach (var item in line.Items)
+                for (int i = line.StartIndex; i < line.StartIndex + line.Count; i++)
                 {
+                    var item = s_Items[i];
                     float itemCross = item.HypoCrossSize + item.TotalMarginCross;
                     if (itemCross > lineMaxCross)
                     {
@@ -215,32 +258,35 @@ namespace CanvasFlexbox
                 }
 
                 line.CrossSize = lineMaxCross;
+                s_Lines[l] = line;
             }
 
             // Single line stretch fallback if container has available cross space
-            if (lines.Count == 1 && root.Wrap == FlexWrap.NoWrap && root.AlignItems == AlignItems.Stretch)
+            if (s_Lines.Count == 1 && container.Wrap == FlexWrap.NoWrap && container.AlignItems == AlignItems.Stretch)
             {
-                if (innerCross > lines[0].CrossSize)
+                if (innerCross > s_Lines[0].CrossSize)
                 {
-                    lines[0].CrossSize = innerCross;
+                    var line0 = s_Lines[0];
+                    line0.CrossSize = innerCross;
+                    s_Lines[0] = line0;
                 }
             }
 
             // Step 4: Cross Axis Lines Distribution (AlignContent)
             float totalLinesCross = 0f;
-            for (int i = 0; i < lines.Count; i++)
+            for (int i = 0; i < s_Lines.Count; i++)
             {
-                totalLinesCross += lines[i].CrossSize;
+                totalLinesCross += s_Lines[i].CrossSize;
             }
-            float totalCrossGaps = Mathf.Max(0, lines.Count - 1) * crossGap;
+            float totalCrossGaps = Mathf.Max(0, s_Lines.Count - 1) * crossGap;
             float remainingCross = innerCross - (totalLinesCross + totalCrossGaps);
 
             float crossStartOffset = 0f;
             float extraCrossGap = 0f;
 
-            if (lines.Count > 0)
+            if (s_Lines.Count > 0)
             {
-                switch (root.AlignContent)
+                switch (container.AlignContent)
                 {
                     case AlignContent.FlexStart:
                         crossStartOffset = 0f;
@@ -256,20 +302,22 @@ namespace CanvasFlexbox
                         break;
                     case AlignContent.SpaceBetween:
                         crossStartOffset = 0f;
-                        extraCrossGap = lines.Count > 1 && remainingCross > 0f ? remainingCross / (lines.Count - 1) : 0f;
+                        extraCrossGap = s_Lines.Count > 1 && remainingCross > 0f ? remainingCross / (s_Lines.Count - 1) : 0f;
                         break;
                     case AlignContent.SpaceAround:
-                        float unitAround = remainingCross > 0f ? remainingCross / lines.Count : 0f;
+                        float unitAround = remainingCross > 0f ? remainingCross / s_Lines.Count : 0f;
                         crossStartOffset = unitAround / 2f;
                         extraCrossGap = unitAround;
                         break;
                     case AlignContent.Stretch:
                         if (remainingCross > 0f)
                         {
-                            float extraPerLine = remainingCross / lines.Count;
-                            foreach (var line in lines)
+                            float extraPerLine = remainingCross / s_Lines.Count;
+                            for (int l = 0; l < s_Lines.Count; l++)
                             {
+                                var line = s_Lines[l];
                                 line.CrossSize += extraPerLine;
+                                s_Lines[l] = line;
                             }
                         }
                         crossStartOffset = 0f;
@@ -280,7 +328,7 @@ namespace CanvasFlexbox
 
             // Step 5: Justify Content (Main Axis) & Align Items (Cross Axis)
             float currentLineCross;
-            bool isWrapReverse = root.Wrap == FlexWrap.WrapReverse;
+            bool isWrapReverse = container.Wrap == FlexWrap.WrapReverse;
 
             if (isWrapReverse)
             {
@@ -291,14 +339,15 @@ namespace CanvasFlexbox
                 currentLineCross = crossPadStart + crossStartOffset;
             }
 
-            foreach (var line in lines)
+            for (int l = 0; l < s_Lines.Count; l++)
             {
+                var line = s_Lines[l];
                 float lineActualMain = 0f;
-                foreach (var item in line.Items)
+                for (int i = line.StartIndex; i < line.StartIndex + line.Count; i++)
                 {
-                    lineActualMain += item.OuterMainSize;
+                    lineActualMain += s_Items[i].OuterMainSize;
                 }
-                lineActualMain += Mathf.Max(0, line.Items.Count - 1) * mainGap;
+                lineActualMain += Mathf.Max(0, line.Count - 1) * mainGap;
                 float freeMain = innerMain - lineActualMain;
 
                 float mainOffset = 0f;
@@ -306,7 +355,7 @@ namespace CanvasFlexbox
 
                 if (freeMain > 0f)
                 {
-                    switch (root.JustifyContent)
+                    switch (container.JustifyContent)
                     {
                         case JustifyContent.FlexStart:
                             mainOffset = 0f;
@@ -322,39 +371,40 @@ namespace CanvasFlexbox
                             break;
                         case JustifyContent.SpaceBetween:
                             mainOffset = 0f;
-                            extraMainGap = line.Items.Count > 1 ? freeMain / (line.Items.Count - 1) : 0f;
+                            extraMainGap = line.Count > 1 ? freeMain / (line.Count - 1) : 0f;
                             break;
                         case JustifyContent.SpaceAround:
-                            float unitAround = freeMain / line.Items.Count;
+                            float unitAround = freeMain / line.Count;
                             mainOffset = unitAround / 2f;
                             extraMainGap = unitAround;
                             break;
                         case JustifyContent.SpaceEvenly:
-                            float unitEvenly = freeMain / (line.Items.Count + 1);
+                            float unitEvenly = freeMain / (line.Count + 1);
                             mainOffset = unitEvenly;
                             extraMainGap = unitEvenly;
                             break;
                     }
                 }
 
-                // Position items on main axis
+                // Position items on main axis and cross axis
                 float currentMain = mainPadStart + mainOffset;
-                foreach (var item in line.Items)
+                float lineTop = isWrapReverse ? currentLineCross - line.CrossSize : currentLineCross;
+
+                for (int i = line.StartIndex; i < line.StartIndex + line.Count; i++)
                 {
+                    var item = s_Items[i];
                     item.MainPos = currentMain + item.MarginMainStart;
                     currentMain += item.MarginMainStart + item.TargetMainSize + item.MarginMainEnd + mainGap + extraMainGap;
 
-                    // Cross axis alignment for this item
                     AlignItems effectiveAlign = item.Node.AlignSelf switch
                     {
                         AlignSelf.FlexStart => AlignItems.FlexStart,
                         AlignSelf.FlexEnd => AlignItems.FlexEnd,
                         AlignSelf.Center => AlignItems.Center,
                         AlignSelf.Stretch => AlignItems.Stretch,
-                        _ => root.AlignItems
+                        _ => container.AlignItems
                     };
 
-                    float lineTop = isWrapReverse ? currentLineCross - line.CrossSize : currentLineCross;
                     float availableCross = line.CrossSize - item.TotalMarginCross;
 
                     switch (effectiveAlign)
@@ -377,6 +427,8 @@ namespace CanvasFlexbox
                             item.CrossPos = lineTop + item.MarginCrossStart;
                             break;
                     }
+
+                    s_Items[i] = item;
                 }
 
                 if (isWrapReverse)
@@ -389,49 +441,41 @@ namespace CanvasFlexbox
                 }
             }
 
-            // Step 6: Map to final Layout Coordinates
-            bool isReverse = root.IsReverse;
-            foreach (var line in lines)
+            // Step 6: Map to final Layout Coordinates on child nodes
+            bool isReverse = container.IsReverse;
+            for (int i = 0; i < s_Items.Count; i++)
             {
-                foreach (var item in line.Items)
+                var item = s_Items[i];
+                if (isRow)
                 {
-                    if (isRow)
+                    if (isReverse)
                     {
-                        if (isReverse)
-                        {
-                            item.Node.LayoutX = containerMain - mainPadEnd - (item.MainPos - mainPadStart + item.TargetMainSize);
-                        }
-                        else
-                        {
-                            item.Node.LayoutX = item.MainPos;
-                        }
-
-                        item.Node.LayoutY = item.CrossPos;
-                        item.Node.LayoutWidth = item.TargetMainSize;
-                        item.Node.LayoutHeight = item.TargetCrossSize;
+                        item.Node.LayoutX = containerMain - mainPadEnd - (item.MainPos - mainPadStart + item.TargetMainSize);
                     }
                     else
                     {
-                        item.Node.LayoutX = item.CrossPos;
-
-                        if (isReverse)
-                        {
-                            item.Node.LayoutY = containerMain - mainPadEnd - (item.MainPos - mainPadStart + item.TargetMainSize);
-                        }
-                        else
-                        {
-                            item.Node.LayoutY = item.MainPos;
-                        }
-
-                        item.Node.LayoutWidth = item.TargetCrossSize;
-                        item.Node.LayoutHeight = item.TargetMainSize;
+                        item.Node.LayoutX = item.MainPos;
                     }
 
-                    // Recursively layout children if child is also a flex container
-                    if (item.Node.Children.Count > 0)
+                    item.Node.LayoutY = item.CrossPos;
+                    item.Node.LayoutWidth = item.TargetMainSize;
+                    item.Node.LayoutHeight = item.TargetCrossSize;
+                }
+                else
+                {
+                    item.Node.LayoutX = item.CrossPos;
+
+                    if (isReverse)
                     {
-                        CalculateLayout(item.Node, item.Node.LayoutWidth, item.Node.LayoutHeight);
+                        item.Node.LayoutY = containerMain - mainPadEnd - (item.MainPos - mainPadStart + item.TargetMainSize);
                     }
+                    else
+                    {
+                        item.Node.LayoutY = item.MainPos;
+                    }
+
+                    item.Node.LayoutWidth = item.TargetCrossSize;
+                    item.Node.LayoutHeight = item.TargetMainSize;
                 }
             }
         }
