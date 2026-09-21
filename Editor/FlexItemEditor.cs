@@ -85,9 +85,50 @@ namespace CanvasFlexbox.Editor
 
         private void DrawPresetBar()
         {
-            EditorGUILayout.LabelField("Item Presets", EditorStyles.miniBoldLabel);
-            EditorGUILayout.BeginHorizontal();
+            var item = (FlexItem)target;
+            var container = item != null ? item.GetComponentInParent<FlexContainer>() : null;
+            bool isParentRow = container == null || container.Direction == FlexDirection.Row || container.Direction == FlexDirection.RowReverse;
 
+            EditorGUILayout.LabelField("Quick Sizing Presets", EditorStyles.miniBoldLabel);
+
+            // Row 1: Context-aware Fill Width, Fill Height, Fill Both
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Fill Width", EditorStyles.miniButtonLeft))
+            {
+                if (isParentRow)
+                {
+                    _flexGrowProp.floatValue = 1f;
+                    _flexShrinkProp.floatValue = 1f;
+                }
+                else
+                {
+                    _alignSelfProp.enumValueIndex = (int)AlignSelf.Stretch;
+                }
+            }
+
+            if (GUILayout.Button("Fill Height", EditorStyles.miniButtonMid))
+            {
+                if (isParentRow)
+                {
+                    _alignSelfProp.enumValueIndex = (int)AlignSelf.Stretch;
+                }
+                else
+                {
+                    _flexGrowProp.floatValue = 1f;
+                    _flexShrinkProp.floatValue = 1f;
+                }
+            }
+
+            if (GUILayout.Button("Fill Both", EditorStyles.miniButtonRight))
+            {
+                _flexGrowProp.floatValue = 1f;
+                _flexShrinkProp.floatValue = 1f;
+                _alignSelfProp.enumValueIndex = (int)AlignSelf.Stretch;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            // Row 2: Fixed (0), Flexible (1), 100% Basis
+            EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Fixed (0)", EditorStyles.miniButtonLeft))
             {
                 _flexGrowProp.floatValue = 0f;
@@ -100,17 +141,13 @@ namespace CanvasFlexbox.Editor
                 _flexShrinkProp.floatValue = 1f;
             }
 
-            if (GUILayout.Button("Auto Basis", EditorStyles.miniButtonMid))
+            if (GUILayout.Button("100% Basis", EditorStyles.miniButtonRight))
             {
                 var unitProp = _flexBasisProp.FindPropertyRelative("_unit");
-                if (unitProp != null) unitProp.enumValueIndex = (int)FlexUnit.Auto;
+                var valProp = _flexBasisProp.FindPropertyRelative("_value");
+                if (unitProp != null) unitProp.enumValueIndex = (int)FlexUnit.Percent;
+                if (valProp != null) valProp.floatValue = 100f;
             }
-
-            if (GUILayout.Button("Stretch Cross", EditorStyles.miniButtonRight))
-            {
-                _alignSelfProp.enumValueIndex = (int)AlignSelf.Stretch;
-            }
-
             EditorGUILayout.EndHorizontal();
         }
 

@@ -83,6 +83,18 @@ namespace CanvasFlexbox.Editor
             {
                 EditorGUILayout.PropertyField(_fitWidthProp, new GUIContent("Fit To Content Width", "Resizes container RectTransform width to fit content."));
                 EditorGUILayout.PropertyField(_fitHeightProp, new GUIContent("Fit To Content Height", "Resizes container RectTransform height to fit content."));
+
+                EditorGUILayout.Space(2);
+                if (GUILayout.Button("Stretch to Parent (Full Width/Height)", EditorStyles.miniButton))
+                {
+                    var container = (FlexContainer)target;
+                    var rect = container.RectTransform;
+                    Undo.RecordObject(rect, "Stretch Container to Parent");
+                    rect.anchorMin = Vector2.zero;
+                    rect.anchorMax = Vector2.one;
+                    rect.offsetMin = Vector2.zero;
+                    rect.offsetMax = Vector2.zero;
+                }
             }
 
             EditorGUILayout.Space(8);
